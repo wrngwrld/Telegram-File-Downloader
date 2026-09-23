@@ -2,9 +2,10 @@ import argparse
 import logging
 import os
 from mimetypes import guess_extension
+import uuid
 
 from dotenv import load_dotenv
-from telethon import TelegramClient, sync
+from telethon import TelegramClient, client, sync
 from telethon.tl.types import MessageMediaPhoto
 
 # Load environment variables from the .env file
@@ -97,7 +98,7 @@ def check_and_download_file(message, file_path):
         # Skip downloading if the file already exists
         if os.path.exists(file_path):
             logging.info(f"File already exists: {file_path}, skipping download.")
-            return file_path, os.path.getsize(file_path)
+            return 
 
         temp_file_path = file_path + ".tmp"
 
@@ -111,8 +112,8 @@ def check_and_download_file(message, file_path):
             and os.path.getsize(temp_file_path) > 0
         ):
             os.rename(temp_file_path, file_path)
-            logging.info(f"Downloaded: {file_path}")
-            return file_path, os.path.getsize(file_path)
+            logging.info(f"Downloaded: {file_path} with size {os.path.getsize(file_path) / (1024 * 1024):.2f} megabytes")
+            return 
         else:
             logging.warning(
                 f"Downloaded file is incomplete or missing: {temp_file_path}"
@@ -121,7 +122,7 @@ def check_and_download_file(message, file_path):
                 os.remove(temp_file_path)
     except Exception as error:
         logging.error(f"Failed to download file: {error}")
-    return None, 0
+    return 
 
 
 def list_dialogs():
@@ -165,6 +166,37 @@ def resolve_entity(entity_identifier):
         # Keep as string for usernames like '@channel' or 'me'
         return entity_identifier
 
+def download_message(message, save_directory,file_type):
+    if message.media:
+        if isinstance(message.media, MessageMediaPhoto):
+            if not file_type or file_type.lower() == "images":
+                file_name = f"{message.id}.jpg"
+                file_path = os.path.join(save_directory, file_name)
+                check_and_download_file(message, file_path)
+
+        elif message.file:
+            mime_type = message.file.mime_type
+            file_extension = guess_extension(mime_type) if mime_type else None
+            if file_extension is None:
+                file_extension = ""
+
+            file_name = message.file.name or str(message.id)
+            if file_extension and not file_name.endswith(file_extension):
+                file_name += file_extension
+
+            file_path = os.path.join(save_directory, file_name)
+
+            if (
+                not file_type
+                or (
+                    file_type.lower() in FILE_CATEGORIES
+                    and file_extension.lstrip(".")
+                    in FILE_CATEGORIES.get(file_type.lower(), [])
+                )
+                or (file_extension.lstrip(".") == file_type.lower())
+            ):
+                check_and_download_file(message, file_path)
+
 
 def download_files_from_entity(
     entity_identifier, file_type=None, save_directory=".", message_limit=100
@@ -172,8 +204,6 @@ def download_files_from_entity(
     create_directory_if_needed(save_directory)
     cleanup_incomplete_files(save_directory)
 
-    total_file_size = 0
-    total_files_downloaded = 0
     message_limit = None if message_limit == 0 else message_limit
 
     # Resolve the entity (convert to int if numeric, keep as string otherwise)
@@ -181,52 +211,20 @@ def download_files_from_entity(
 
     with telegram_client:
         logging.info(f"Fetching messages from: {entity_identifier}")
-        messages = telegram_client.iter_messages(entity, limit=message_limit)
+        messages = telegram_client.iter_messages(entity, limit=message_limit, reverse=True)
 
         for message in messages:
-            if message.media:
-                if isinstance(message.media, MessageMediaPhoto):
-                    if not file_type or file_type.lower() == "images":
-                        file_name = f"{message.id}.jpg"
-                        file_path = os.path.join(save_directory, file_name)
-                        downloaded_file, file_size = check_and_download_file(
-                            message, file_path
-                        )
-                        if downloaded_file:
-                            total_file_size += file_size
-                            total_files_downloaded += 1
+            if not message or not message.replies:
+                continue
 
-                elif message.file:
-                    mime_type = message.file.mime_type
-                    file_extension = guess_extension(mime_type) if mime_type else None
-                    if file_extension is None:
-                        file_extension = ""
+            messages_save_directory = os.path.join(save_directory, str(message.message) or str(message.id) or uuid.uuid4())
+            create_directory_if_needed(messages_save_directory)
 
-                    file_name = message.file.name or str(message.id)
-                    if file_extension and not file_name.endswith(file_extension):
-                        file_name += file_extension
+            download_message(message, messages_save_directory, file_type)
 
-                    file_path = os.path.join(save_directory, file_name)
+            for reply in telegram_client.iter_messages(entity, reply_to=message.id, reverse=True):
+                download_message(reply, messages_save_directory, file_type)
 
-                    if (
-                        not file_type
-                        or (
-                            file_type.lower() in FILE_CATEGORIES
-                            and file_extension.lstrip(".")
-                            in FILE_CATEGORIES.get(file_type.lower(), [])
-                        )
-                        or (file_extension.lstrip(".") == file_type.lower())
-                    ):
-                        downloaded_file, file_size = check_and_download_file(
-                            message, file_path
-                        )
-                        if downloaded_file:
-                            total_file_size += file_size
-                            total_files_downloaded += 1
-
-    logging.info(
-        f"\nSummary: Total files downloaded: {total_files_downloaded}, Total size: {total_file_size / (1024 * 1024):.2f} MB"
-    )
 
 
 if __name__ == "__main__":

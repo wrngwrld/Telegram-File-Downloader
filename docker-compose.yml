@@ -1,0 +1,16 @@
+services:
+  telegram-file-downloader:
+    build: .
+    container_name: telegram-file-downloader
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      ENTITY: ${ENTITY}
+      FORMAT: ${FORMAT:-}
+      OUTPUT: /app/downloads
+      LIMIT: ${LIMIT:-0}
+      INTERVAL: ${INTERVAL:-3600}
+    volumes:
+      - ./downloads:/app/downloads
+      - ./session:/app/session
